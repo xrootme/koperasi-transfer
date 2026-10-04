@@ -30,6 +30,7 @@ const ADMIN_COMMANDS = new Set([
   "hapus","remove","delete","hapus_anggota","hapus-anggota","h","del",
   "list","cek","lihat","cari","show","anggota","list_anggota","c",
   "help","menu","bantuan","bantuan_crud","perintah","?","jid","carjid","carilid","nomor","whoami","siapa","debug",
+  "panduan","cara","cara_pakai","help_detail",
 ]);
 
 function isAdminCommand(text) {
@@ -262,45 +263,168 @@ function parseSimpleLunas(rawText, pairs) {
 }
 
 
-const HELP_TEXT = `*KOPERASI BOT — Admin CRUD*
+const HELP_TEXT = `*BANTUAN KOPERASI BOT*
 
-*SIMPLE (sekali jalan, tanpa label):*
-tambah 081234567890 Budi 2026-10-06 5jt
-→ hari otomatis dari tgl, angsuran auto 500rb (5jt/10)
-tambah 081234567890 Budi Santoso 2026-10-06 5000000 500000
-→ nominal penuh juga bisa
-lunas 081234567890 2
-→ angsuran ke-2 ditandai *Sudah dibayar*
-lunas 081234567890 ke1 3
-→ angsuran ke-3 dari pinjaman ke-1
-set 081234567890 ke1 a3:Sudah dibayar
-ubah 081234567890 Budi Santoso
-→ ganti nama
-ubah 081234567890 6jt
-→ ganti pinjaman jadi 6jt
-hapus 081234567890
-→ hapus pinjaman ke-1 (default)
-cek 081234567890
-list Senin / list all
+Ketik salah satu perintah di bawah. Semua dikirim ke bot ini.
 
-*LENGKAP (pakai label):*
-tambah 081234567890 nama:Budi hari:Senin tgl:2026-10-06 pinjaman:5000000 ke:1 angsuran:500000
-lunas 081234567890 ke:1 angsuran_ke:2
-cek 081234567890
-hapus 081234567890 ke:1
+━━━━━━━━━━━━━━━━━━━━━━
 
-*STATUS ANGSURAN (A1..A10):*
-• *Sudah dibayar* — sudah dibayar
-• *Belum dibayar* — belum dibayar
-• *Terkirim* — sudah diingatkan, belum dibayar
-Kata *LUNAS* hanya muncul kalau 10/10 angsuran sudah dibayar.
+*1. TAMBAH ANGGOTA BARU*
 
-*Catatan:*
-- hp wajib 08../62..
-- ke = pinjaman_ke (default 1)
-- Hari jadwal: Senin..Sabtu (otomatis dari tanggal)
-- Hanya nomor admin terdaftar
-Ketik *menu* lagi untuk bantuan.`;
+Contoh:
+\`tambah 081234567890 Budi 2026-10-06 5jt\`
+
+Artinya:
+• Nomor HP : 081234567890
+• Nama     : Budi
+• Tanggal  : 6 Oktober 2026
+• Pinjaman : 5 juta (5jt)
+• Angsuran : otomatis 500.000 (5 juta ÷ 10)
+• Kelompok : otomatis dari tanggal (Senin)
+
+Bisa juga langsung isi semua:
+\`tambah 081234567890 Budi Santoso 2026-10-06 5000000 500000\`
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+*2. UBAH DATA*
+
+Ganti nama saja:
+\`ubah 081234567890 Budi Santoso\`
+
+Ganti jumlah pinjaman saja:
+\`ubah 081234567890 6jt\`
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+*3. TANDAI ANGSURAN SUDAH DIBAYAR*
+
+Angsuran ke-2 sudah dibayar:
+\`lunas 081234567890 2\`
+
+Angsuran ke-3 dari pinjaman ke-1:
+\`lunas 081234567890 ke1 3\`
+
+Atau pakai kolom:
+\`set 081234567890 ke1 a3:Sudah dibayar\`
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+*4. LIHAT DATA*
+
+Satu orang:
+\`cek 081234567890\`
+
+Semua di kelompok Senin:
+\`list Senin\`
+
+Semua anggota:
+\`list all\`
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+*5. HAPUS ANGGOTA*
+
+\`hapus 081234567890\`
+
+Kalau punya lebih dari satu pinjaman, tentukan:
+\`hapus 081234567890 ke:1\`
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+*PENDUKUNG*
+
+\`menu\` → tampilkan bantuan ini
+\`panduan\` → penjelasan cara kerja bot
+\`jid\` → cek nomor admin
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+*CATATAN*
+
+• Nomor HP harus diawali 08... atau 62...
+• \`ke\` = urutan pinjaman (default 1)
+• Tanggal format: 2026-10-06 atau 06-10-2026
+• Nominal bisa ditulis: 5jt, 500rb, 500k
+• Hanya nomor admin yang bisa memakai perintah ini`;
+
+const PANDUAN_TEXT = `*PANDUAN CARA KERJA BOT*
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+*KETIKA ANGGOTA KIRIM GAMBAR*
+
+Cukup kirim foto bukti transfer ke bot. Bot akan:
+
+1. Menolak gambar yang sama (duplikat)
+2. Menyimpan gambar untuk arsip
+3. Mengecek apakah ini benar bukti transfer
+4. Mencocokkan dengan data anggota
+5. Mengupdate status angsuran
+6. Mengirim balasan ke anggota
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+*HASIL PENGECEKAN*
+
+✅ *DITERIMA* (VERIFIED)
+Bukti valid, hari sesuai, nominal cocok
+• Angsuran ditandai Sudah dibayar
+• Anggota dapat balasan terima kasih
+• Transaksi tercatat di sheet Transaksi
+
+⚠️ *PERLU PERIKSA* (REVIEW)
+Bukti kurang jelas / hari tidak cocok / nominal beda
+• Tidak diupdate otomatis
+• Bot meneruskan ke admin untuk diputuskan
+
+❌ *DITOLAK* (SKIP)
+Bukan bukti transfer
+• Tidak dibalas ke anggota
+• Bot meneruskan ke admin
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+*SYARAT UPDATE OTOMIS*
+
+✓ Gambar bukan duplikat
+✓ AI mengenali sebagai bukti transfer
+✓ Hari ini = hari jadwal anggota
+✓ Nominal sesuai dengan tagihan
+✓ Tanggal transfer wajar
+✓ Angsuran belum pernah dibayar
+
+Kalau salah satu tidak terpenuhi → masuk PERLU PERIKSA
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+*STRUKTUR DATA*
+
+Setiap kelompok punya sheet sendiri:
+Senin, Selasa, Rabu, Kamis, Jumat, Sabtu
+
+Setiap anggota memiliki:
+• Nama dan nomor HP
+• Pinjaman (boleh lebih dari satu)
+• Tanggal pencairan
+• 10 angsuran mingguan
+
+Sheet tambahan:
+• Transaksi = riwayat pembayaran
+• Review = bukti yang perlu dipertimbangkan
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+*PENENTUAN KELOMPOK*
+
+Kelompok ditentukan dari tanggal pencairan:
+• Tanggal 6 Oktober 2026 (Senin) → Kelompok Senin
+• Tanggal 7 Oktober 2026 (Selasa) → Kelompok Selasa
+• Dan seterusnya
+
+Bukti dari anggota Kelompok Senin yang dikirim hari Selasa akan masuk PERLU PERIKSA.
+
+Ketik \`panduan\` kapan saja untuk melihat panduan ini.`;
 
 async function handleAdminCommand(rawText, remoteJid, sock) {
   const text = stripPrefix(rawText);
@@ -319,6 +443,11 @@ async function handleAdminCommand(rawText, remoteJid, sock) {
   try {
     if (["help","menu","bantuan","bantuan_crud","perintah","?"].includes(first)) {
       await sock.sendMessage(remoteJid, { text: HELP_TEXT });
+      return true;
+    }
+
+    if (["panduan","cara","cara_pakai","help_detail"].includes(first)) {
+      await sock.sendMessage(remoteJid, { text: PANDUAN_TEXT });
       return true;
     }
 
@@ -349,11 +478,11 @@ async function handleAdminCommand(rawText, remoteJid, sock) {
     if (["tambah","add","upsert","buat","create"].includes(first)) {
       const pairs = parsePairs(rest);
       const opts = normalizeUpsertOpts(pairs, rest, first);
-      if (!opts.hp) throw new Error("hp wajib. Contoh simpel: tambah 081234567890 Budi 2026-10-06 5jt");
+      if (!opts.hp) throw new Error("hp wajib. Contoh: tambah 081234567890 Budi 2026-10-06 5jt");
       if (!opts.tgl_cair) {
         const checkList = await crud.listMembers({ hp: opts.hp });
         const exists = checkList.some((g) => g.rows && g.rows.length);
-        if (!exists) throw new Error("Anggota baru wajib tgl YYYY-MM-DD. Contoh: tambah 081234567890 Budi 2026-10-06 5jt  atau  tambah 081.. nama:Budi tgl:2026-10-06 pinjaman:5000000");
+        if (!exists) throw new Error("Anggota baru wajib tanggal. Contoh: tambah 081234567890 Budi 2026-10-06 5jt  atau  tambah 081.. nama:Budi tgl:2026-10-06 pinjaman:5000000");
       }
       opts.mode = "upsert";
       const res = await crud.upsertMember(opts);
@@ -385,11 +514,11 @@ async function handleAdminCommand(rawText, remoteJid, sock) {
       if (!opts.angsuran_ke && simple.angsuran_ke) opts.angsuran_ke = simple.angsuran_ke;
       if (!opts.status && simple.status) opts.status = simple.status;
       if (!opts.hari && simple.hari) opts.hari = simple.hari;
-      if (!opts.hp) throw new Error("hp wajib. Contoh simpel: lunas 081234567890 2  (=A2 Lunas)  atau  lunas 081.. ke1 3");
-      if (!opts.angsuran_ke) throw new Error("angsuran_ke wajib 1..10. Contoh: lunas 081234567890 2  atau  set 081.. a3:Lunas");
+      if (!opts.hp) throw new Error("hp wajib. Contoh: lunas 081234567890 2  (=A2 Sudah dibayar)  atau  lunas 081.. ke1 3");
+      if (!opts.angsuran_ke) throw new Error("angsuran_ke wajib 1..10. Contoh: lunas 081234567890 2  atau  set 081.. a3:Sudah dibayar");
       if (!opts.status) {
-        if (["lunas","bayar"].includes(first)) opts.status = "Lunas";
-        else throw new Error("status wajib Lunas/Terkirim/Belum. Contoh: lunas 081.. 2");
+        if (["lunas","bayar"].includes(first)) opts.status = "Sudah dibayar";
+        else throw new Error("status wajib: Sudah dibayar / Belum dibayar / Terkirim. Contoh: set 081.. a2:Belum dibayar");
       }
       opts.mode = "set";
       const res = await crud.upsertMember(opts);
@@ -490,7 +619,7 @@ async function handleAdminCommand(rawText, remoteJid, sock) {
     return false;
   } catch (e) {
     logError(`Admin CRUD ${first} gagal`, e.message);
-    await sock.sendMessage(remoteJid, { text: `❌ Gagal *${first}*: ${e.message}\n\n*Simpel:*\n• tambah 081.. Budi 2026-10-06 5jt\n• ubah 081.. Budi S.\n• lunas 081.. 2\n• cek 081..  /  list Senin\nKetik *menu* untuk bantuan lengkap.` });
+    await sock.sendMessage(remoteJid, { text: `❌ Gagal *${first}*: ${e.message}\n\n*Contoh perintah:*\n• tambah 081.. Budi 2026-10-06 5jt\n• ubah 081.. Budi Santoso\n• lunas 081.. 2\n• cek 081..  /  list Senin\n\nKetik *menu* untuk bantuan lengkap.` });
     return true;
   }
 }

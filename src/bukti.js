@@ -215,8 +215,8 @@ Jangan pernah mengubah status pembayaran menjadi LUNAS hanya berdasarkan confide
 //   gemini = Google Gemini (opsional, hanya dipakai bila AI_PROVIDER=gemini)
 // ============================================================================
 function aiProvider() {
-  const p = String(process.env.AI_PROVIDER || "local").trim().toLowerCase();
-  return p === "gemini" ? "gemini" : "local";
+  const p = String(process.env.AI_PROVIDER || "gemini").trim().toLowerCase();
+  return p === "local" ? "local" : "gemini";
 }
 
 // Model Gemini yang mendukung vision (fallback kalau AI_PROVIDER=gemini).

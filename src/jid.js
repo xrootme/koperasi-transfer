@@ -26,7 +26,7 @@ function lookupPn(pn) {
 
 /**
  * Ambil nomor HP asli dari pesan Baileys.
- * WhatsApp kini memakai LID (mis. 186479611531362@lid) sehingga
+ * WhatsApp kini memakai LID (mis. <lid>@lid) sehingga
  * remoteJid bukan nomor HP. Prioritaskan senderPn/participantPn/remoteJidAlt.
  */
 function resolveSender(msg) {

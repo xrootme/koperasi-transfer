@@ -2,7 +2,7 @@ const { digitsOnly, GROUP_SHEETS } = require("./sheets");
 const { logInfo, logError } = require("./utils");
 
 function getAdminList() {
-  const raw = process.env.ADMIN_NUMBERS || process.env.ADMIN_NUMBER || process.env.ADMIN_JID || "62895634117345";
+  const raw = process.env.ADMIN_NUMBERS || process.env.ADMIN_NUMBER || process.env.ADMIN_JID || "";
   return String(raw).split(",").map((s) => digitsOnly(s.trim())).filter(Boolean);
 }
 function normalizeForCompare(jidOrPhone) {

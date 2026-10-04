@@ -65,7 +65,7 @@ function digitsOnlyLocal(phone) {
   return p;
 }
 function getAdminDigits() {
-  const raw = process.env.ADMIN_NUMBERS || process.env.ADMIN_NUMBER || "62895634117345";
+  const raw = process.env.ADMIN_NUMBERS || process.env.ADMIN_NUMBER || "";
   return String(raw).split(",").map(s=> digitsOnlyLocal(s.trim())).filter(Boolean);
 }
 function isAdminLocal(jidDigits) {

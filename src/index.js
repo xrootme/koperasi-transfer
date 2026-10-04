@@ -39,7 +39,22 @@ const GROUP_MODE = String(process.env.USE_GROUP_SHEETS || "true").toLowerCase() 
 
 async function main() {
   const { detectFormulaSep } = require("./sheets");
+  const { getAdminList } = require("./wa-admin");
   await detectFormulaSep();
+
+  const admins = getAdminList();
+  if (!admins.length) {
+    logError("ADMIN_NUMBERS belum diisi di .env — perintah CRUD dari WhatsApp akan diabaikan semua!");
+  } else {
+    logInfo(`Admin terdaftar: ${admins.length} nomor`);
+  }
+  if (!process.env.GEMINI_API_KEY) {
+    logInfo("GEMINI_API_KEY kosong — verifikasi bukti transfer otomatis nonaktif (gambar hanya diforward ke admin)");
+  }
+  if (!process.env.SPREADSHEET_ID) {
+    logError("SPREADSHEET_ID belum diisi di .env — bot tidak bisa membaca data anggota");
+  }
+
   logInfo(`Memulai koperasi-reminder (Baileys) — mode: ${GROUP_MODE ? "GRUP Senin-Sabtu" : "single sheet"}`);
   await createClient();
 

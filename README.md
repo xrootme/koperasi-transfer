@@ -36,21 +36,30 @@ Saat pertama jalan, scan QR code yang muncul di terminal
 
 | Variabel | Keterangan |
 |---|---|
+| `AI_PROVIDER` | `local` (Hermes/Ollama/vLLM — default) atau `gemini` |
+| `LOCAL_AI_URL` | Base URL OpenAI-compatible, default `http://127.0.0.1:8080/v1` |
+| `LOCAL_AI_MODEL` | Nama model vision di server lokal |
+| `LOCAL_AI_API_KEY` | Kosongkan kalau server tidak minta autentikasi |
+| `LOCAL_AI_TIMEOUT_MS` | Default `120000` |
 | `SPREADSHEET_ID` | ID spreadsheet (dari URL) |
 | `ADMIN_NUMBERS` | Nomor admin, pisahkan koma. Boleh nomor HP atau LID |
-| `GEMINI_API_KEY` | API key Gemini untuk verifikasi bukti |
-| `GEMINI_MODEL` | Default `gemini-2.5-flash`. Jika model tidak ada, otomatis fallback ke model lain |
+| `GEMINI_API_KEY` | Hanya dipakai bila `AI_PROVIDER=gemini` |
+| `GEMINI_MODEL` | Default `gemini-2.5-flash` |
 | `CRON_SCHEDULE` | Jadwal broadcast, default `0 9 * * *` |
 | `TIMEZONE` | Default `Asia/Jakarta` |
 | `DELAY_MS` | Jeda antar pesan, default `3000` |
 | `STRICT_HARI` | `true` = bukti transfer hanya auto-update pada hari jadwal anggota |
 | `USE_GROUP_SHEETS` | `true` = pakai sheet per kelompok |
-| `SHEET_NAME` | Nama sheet saat `USE_GROUP_SHEETS=false` |
 | `BUKTI_MAX_AGE_DAYS` | Bukti transfer dianggap valid jika umurnya ≤ nilai ini, default `14` |
 | `NOMINAL_TOLERANCE` | Toleransi selisih nominal, default `0` (harus persis) |
-| `FORMULA_SEP` | Pemisah formula Sheets. Kosong = autodeteksi dari locale |
 
 > **Penting:** `credentials.json` dan `.env` sudah masuk `.gitignore` — jangan pernah di-commit.
+
+### Menjalankan AI Vision lokal
+
+Verifikasi bukti transfer bisa berjalan **sepenuhnya di VPS** tanpa API cloud, memakai model
+vision yang kompatibel OpenAI (Hermes, Qwen2.5-VL, Llama, Gemma, dll). Panduan lengkap:
+[`docs/HERMES-SETUP.md`](docs/HERMES-SETUP.md).
 
 ## Struktur Sheet
 

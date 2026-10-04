@@ -48,9 +48,18 @@ async function main() {
   } else {
     logInfo(`Admin terdaftar: ${admins.length} nomor`);
   }
-  if (!process.env.GEMINI_API_KEY) {
-    logInfo("GEMINI_API_KEY kosong — verifikasi bukti transfer otomatis nonaktif (gambar hanya diforward ke admin)");
+  if (!process.env.GEMINI_API_KEY && !process.env.LOCAL_AI_URL) {
+    logInfo("GEMINI_API_KEY dan LOCAL_AI_URL kosong — verifikasi bukti transfer otomatis nonaktif");
   }
+  try {
+    const { aiProvider, localConfig } = require("./bukti");
+    if (aiProvider() === "local") {
+      const c = localConfig();
+      logInfo(`AI Vision: LOKAL → ${c.base} (model: ${c.model})`);
+    } else {
+      logInfo(`AI Vision: GEMINI (model: ${process.env.GEMINI_MODEL || "gemini-2.5-flash"})`);
+    }
+  } catch {}
   if (!process.env.SPREADSHEET_ID) {
     logError("SPREADSHEET_ID belum diisi di .env — bot tidak bisa membaca data anggota");
   }

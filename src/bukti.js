@@ -208,7 +208,17 @@ Jika data tidak cocok, hasil akhir harus REVIEW.
 Jangan pernah mengubah status pembayaran menjadi LUNAS hanya berdasarkan confidence AI.
 `;
 
-// Model Gemini yang mendukung vision (urutan fallback).
+// ============================================================================
+// PROVIDER AI Vision
+//   local = Hermes / llama.cpp / Ollama / vLLM (OpenAI-compatible, default)
+//   gemini = Google Gemini (opsional, hanya dipakai bila AI_PROVIDER=gemini)
+// ============================================================================
+function aiProvider() {
+  const p = String(process.env.AI_PROVIDER || "local").trim().toLowerCase();
+  return p === "gemini" ? "gemini" : "local";
+}
+
+// Model Gemini yang mendukung vision (fallback kalau AI_PROVIDER=gemini).
 // gemini-1.5-flash sudah di-retire oleh Google -> jangan dipakai lagi.
 const VISION_MODELS = [
   "gemini-2.5-flash",
@@ -237,52 +247,122 @@ async function callGemini(model, key, body) {
   throw err;
 }
 
+function localConfig() {
+  const base = String(process.env.LOCAL_AI_URL || process.env.LLM_BASE_URL || "http://127.0.0.1:8080/v1").replace(/\/+$/, "");
+  const model = String(process.env.LOCAL_AI_MODEL || process.env.LLM_MODEL || "hermes").trim();
+  const key = String(process.env.LOCAL_AI_API_KEY || process.env.LLM_API_KEY || "local").trim();
+  const timeout = Number(process.env.LOCAL_AI_TIMEOUT_MS) || 120000;
+  const format = String(process.env.LOCAL_AI_RESPONSE_FORMAT || "json_object").toLowerCase();
+  return { base, model, key, timeout, format: format === "none" ? null : format };
+}
+
+/**
+ * Panggil model lokal via endpoint OpenAI-compatible /chat/completions.
+ * Menyerupai: Hermes (NousResearch), llama.cpp server, LM Studio, Ollama, vLLM, SGLang.
+ * Butuh model yang mendukung vision (multimodal).
+ */
+async function callLocal(cfg, bodyParts) {
+  const headers = { "Content-Type": "application/json" };
+  if (cfg.key && cfg.key !== "local") headers.Authorization = `Bearer ${cfg.key}`;
+
+  const body = {
+    model: cfg.model,
+    messages: [{ role: "user", content: bodyParts }],
+    temperature: 0,
+    max_tokens: 1024,
+  };
+  if (cfg.format) body.response_format = { type: cfg.format };
+
+  const res = await fetchWithTimeout(
+    `${cfg.base}/chat/completions`,
+    { method: "POST", headers, body: JSON.stringify(body) },
+    cfg.timeout
+  );
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    const err = new Error(`Local AI HTTP ${res.status}: ${t.slice(0, 400)}`);
+    err.status = res.status;
+    err.body = t;
+    throw err;
+  }
+  const json = await res.json();
+  const text =
+    json?.choices?.[0]?.message?.content ??
+    json?.choices?.[0]?.text ??
+    json?.message?.content ??
+    "";
+  return String(text || "");
+}
+
 async function analyzeBukti(buffer, mimeType = "image/jpeg") {
   if (!buffer || buffer.length < 800) {
     return normalizeAIResult({ is_transfer_proof: false, classification: "UNREADABLE", confidence: 0.9, reason: "File terlalu kecil/rusak", missing_fields: [] });
   }
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) {
-    logError("GEMINI_API_KEY belum diisi di .env — bukti di-skip");
-    return null;
-  }
   const mime = mimeType.includes("/") ? mimeType : "image/jpeg";
-  const body = {
-    contents: [{ parts: [{ text: PROMPT }, { inlineData: { mimeType: mime, data: buffer.toString("base64") } }] }],
-    generationConfig: { temperature: 0, maxOutputTokens: 1024, responseMimeType: "application/json" },
-  };
+  const provider = aiProvider();
+  const b64 = buffer.toString("base64");
+  const dataUrl = `data:${mime};base64,${b64}`;
 
-  let json = null, lastErr = null;
-  for (const model of modelCandidates()) {
+  let text = null;
+
+  if (provider === "local") {
+    const cfg = localConfig();
+    logInfo(`AI Vision lokal → ${cfg.base} model=${cfg.model}`);
     try {
-      json = await callGemini(model, key, body);
-      activeModel = model;
-      break;
+      text = await callLocal(cfg, [
+        { type: "text", text: PROMPT },
+        { type: "image_url", image_url: { url: dataUrl } },
+      ]);
+      activeModel = `local:${cfg.model}`;
     } catch (e) {
-      lastErr = e;
-      // Hanya fallback bila model memang tidak tersedia/retire.
-      // 400 (gambar rusak) atau 401/429 = masalah lain, jangan fallback.
-      const modelGone = e.status === 404 || /(is not found for API version|models\/\S+ is not found|model not found)/i.test(e.body || "");
-      if (modelGone) {
-        logInfo(`Model ${model} tidak tersedia, mencoba fallback...`);
-        continue;
-      }
+      // Server lokal belum jalan / model tidak support vision -> beri petunjuk jelas
+      logError(`Local AI gagal (${cfg.base}): ${e.message}`);
+      logError(`Pastikan server AI lokal jalan & model '${cfg.model}' mendukung vision (multimodal).`);
+      logError(`Uji manual: curl ${cfg.base}/models`);
       throw e;
     }
+  } else {
+    const key = process.env.GEMINI_API_KEY;
+    if (!key) {
+      logError("AI_PROVIDER=gemini tapi GEMINI_API_KEY belum diisi di .env — bukti di-skip");
+      return null;
+    }
+    const body = {
+      contents: [{ parts: [{ text: PROMPT }, { inlineData: { mimeType: mime, data: b64 } }] }],
+      generationConfig: { temperature: 0, maxOutputTokens: 1024, responseMimeType: "application/json" },
+    };
+    let json = null, lastErr = null;
+    for (const model of modelCandidates()) {
+      try {
+        json = await callGemini(model, key, body);
+        activeModel = model;
+        break;
+      } catch (e) {
+        lastErr = e;
+        // Hanya fallback bila model memang tidak tersedia/retire.
+        // 400 (gambar rusak) atau 401/429 = masalah lain, jangan fallback.
+        const modelGone = e.status === 404 || /(is not found for API version|models\/\S+ is not found|model not found)/i.test(e.body || "");
+        if (modelGone) {
+          logInfo(`Model ${model} tidak tersedia, mencoba fallback...`);
+          continue;
+        }
+        throw e;
+      }
+    }
+    if (!json) throw lastErr || new Error("Gemini: tidak ada model yang tersedia");
+    text = json?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    if (!text) throw new Error("Gemini kosong");
   }
-  if (!json) throw lastErr || new Error("Gemini: tidak ada model yang tersedia");
 
-  const text = json?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-  if (!text) throw new Error("Gemini kosong");
   let parsed;
   try {
     parsed = JSON.parse(cleanJsonText(text));
   } catch (e) {
-    logError("Gemini JSON parse gagal", text.slice(0, 500));
+    logError("AI JSON parse gagal:", String(text).slice(0, 500));
     return normalizeAIResult({ is_transfer_proof: false, classification: "UNREADABLE", confidence: 0.6, reason: "AI tidak mengembalikan JSON valid", missing_fields: [] });
   }
   const out = normalizeAIResult(parsed);
-  logInfo(`AI Vision [${activeModel}] → ${out.classification} conf=${out.confidence} nominal=${out.nominal ?? "-"} tgl=${out.tanggal_transfer ?? "-"} status=${out.status_transaksi ?? "-"}`);
+  logInfo(`AI Vision [${activeModel || provider}] → ${out.classification} conf=${out.confidence} nominal=${out.nominal ?? "-"} tgl=${out.tanggal_transfer ?? "-"} status=${out.status_transaksi ?? "-"}`);
   return out;
 }
 
@@ -292,4 +372,4 @@ async function isBuktiTransfer(buffer, mimeType) {
   return r.classification === "VALID_TRANSFER_PROOF" && r.confidence >= 0.75;
 }
 
-module.exports = { analyzeBukti, isBuktiTransfer, normalizeAIResult, PROMPT };
+module.exports = { analyzeBukti, isBuktiTransfer, normalizeAIResult, PROMPT, aiProvider, localConfig };

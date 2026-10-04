@@ -219,16 +219,21 @@ function aiProvider() {
   return p === "local" ? "local" : "gemini";
 }
 
-// Model Gemini yang mendukung vision (fallback kalau AI_PROVIDER=gemini).
-// gemini-1.5-flash sudah di-retire oleh Google -> jangan dipakai lagi.
+// Model Gemini yang mendukung vision (urutan fallback).
+// gemini-1.5-flash & gemini-2.5-flash sudah di-retire/tolak untuk user baru.
 const VISION_MODELS = [
+  "gemini-3.8-flash",
+  "gemini-3.7-flash",
+  "gemini-3.5-flash",
   "gemini-2.5-flash",
   "gemini-flash-latest",
-  "gemini-2.0-flash",
-  "gemini-2.5-pro",
-  "gemini-pro-latest",
 ];
 let activeModel = null; // di-cache setelah berhasil
+
+function geminiModel() {
+  if (activeModel) return activeModel;
+  return String(process.env.GEMINI_MODEL || "gemini-3.8-flash").trim() || "gemini-3.8-flash";
+}
 
 function modelCandidates() {
   const configured = String(process.env.GEMINI_MODEL || "").trim();
@@ -295,6 +300,30 @@ async function callLocal(cfg, bodyParts) {
   return String(text || "");
 }
 
+/**
+ * Fallback: models.generateContent dengan inlineData (berhasil diuji, tidak perlu upload file).
+ * Dipakai kalau Interactions API gagal.
+ */
+async function client_fallback_generateContent(key, model, mime, b64) {
+  const { GoogleGenAI } = require("@google/genai");
+  const client = new GoogleGenAI({ apiKey: key });
+  const res = await client.models.generateContent({
+    model,
+    contents: [{
+      role: "user",
+      parts: [
+        { text: PROMPT },
+        { inlineData: { mimeType: mime, data: b64 } },
+      ],
+    }],
+    generationConfig: { temperature: 0, maxOutputTokens: 1024, responseMimeType: "application/json" },
+  });
+  const text = res?.text || res?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  if (!text) throw new Error("Gemini generateContent: respons kosong");
+  logInfo(`Gemini OK (generateContent) — balasan ${text.length} karakter`);
+  return { text, usedModel: model };
+}
+
 async function analyzeBukti(buffer, mimeType = "image/jpeg", opts = {}) {
   if (!buffer || buffer.length < 800) {
     return normalizeAIResult({ is_transfer_proof: false, classification: "UNREADABLE", confidence: 0.9, reason: "File terlalu kecil/rusak", missing_fields: [] });
@@ -328,64 +357,95 @@ async function analyzeBukti(buffer, mimeType = "image/jpeg", opts = {}) {
       logError("AI_PROVIDER=gemini tapi GEMINI_API_KEY belum diisi di .env — bukti di-skip");
       return null;
     }
-    // Pakai SDK resmi @google/genai (GoogleGenAI + files.upload + interactions.create)
+    logInfo(`Gemini → cek model (dimulai: ${geminiModel()})`);
+
+    // Cek dulu model mana yang benar-benar tersedia (daftar model bisa berubah sewaktu-waktu)
+    let model = geminiModel();
+    const candidates = modelCandidates();
+    let lastErr = null;
+    for (const m of candidates) {
+      try {
+        const r = await fetchWithTimeout(
+          `https://generativelanguage.googleapis.com/v1beta/models/${m}?key=${key}`,
+          { method: "GET" },
+          10000
+        );
+        if (!r.ok) {
+          const t = await r.text().catch(() => "");
+          lastErr = new Error(`HTTP ${r.status}: ${t.slice(0, 200)}`);
+          logInfo(`Model ${m} tidak tersedia — coba berikutnya`);
+          continue;
+        }
+        model = m;
+        activeModel = m;
+        logInfo(`Model aktif: ${m}`);
+        break;
+      } catch (e) {
+        lastErr = e;
+        logInfo(`Cek model ${m} gagal: ${e.message} — coba berikutnya`);
+      }
+    }
+    if (!activeModel) {
+      logError(`Tidak ada model Gemini yang bisa diakses. Terakhir: ${lastErr && lastErr.message}`);
+      throw lastErr || new Error("Tidak ada model Gemini tersedia untuk API key ini");
+    }
+
+    // Panggil Interactions API (SDK resmi): upload file → kirim pertanyaan + gambar
     try {
       const { GoogleGenAI } = require("@google/genai");
       const client = new GoogleGenAI({ apiKey: key });
-      const model = String(process.env.GEMINI_MODEL || "gemini-3.8-flash").trim();
 
-      // 1) Upload gambar (dari path file yang sudah disimpan, atau dari buffer)
-      let uri, mimeOut;
       const filePath = opts && opts.filePath;
-      if (filePath && fs.existsSync(filePath)) {
+      const useFilePath = filePath && fs.existsSync(filePath);
+      logInfo(`Upload gambar ke Gemini: ${useFilePath ? "file path" : "inline bytes"} (${(buffer.length / 1024).toFixed(1)} KB, mime ${mime})`);
+
+      let uri, mimeOut = mime;
+      if (useFilePath) {
+        // WAJIB path — files.upload({bytes}) gagal dengan error size_bytes
         const uploaded = await client.files.upload({ file: filePath, config: { mimeType: mime } });
         uri = uploaded.uri || uploaded.file?.uri;
         mimeOut = uploaded.mimeType || uploaded.file?.mimeType || mime;
-      } else {
-        const uploaded = await client.files.upload({
-          file: { bytes: buffer, mimeType: mime },
-          config: { mimeType: mime },
-        });
-        uri = uploaded.uri || uploaded.file?.uri;
-        mimeOut = uploaded.mimeType || uploaded.file?.mimeType || mime;
+        logInfo(`Upload OK: ${String(uri).slice(0, 70)}`);
       }
 
-      // 2) Minta klasifikasi ke model
-      const interaction = await client.interactions.create({
-        model,
-        input: [
-          { type: "text", text: PROMPT },
-          { type: "image", uri, mime_type: mimeOut },
-        ],
-      });
-
-      text = interaction?.output_text || interaction?.output?.text || interaction?.text || "";
-      activeModel = model;
-      if (!text) throw new Error("Gemini SDK: respons kosong");
-      logInfo(`Gemini SDK upload ok → ${model} (uri: ${String(uri).slice(0, 60)}...)`);
-    } catch (sdkErr) {
-      logError(`Gemini SDK gagal: ${sdkErr.message}`);
-      logError("Beralih ke REST API generateContent...");
-      const body = {
-        contents: [{ parts: [{ text: PROMPT }, { inlineData: { mimeType: mime, data: b64 } }] }],
-        generationConfig: { temperature: 0, maxOutputTokens: 1024, responseMimeType: "application/json" },
-      };
-      let json = null, lastErr = null;
-      for (const model of modelCandidates()) {
+      // Coba Interactions API di beberapa model (beberapa modelmayor service
+      // masih terdaftar di /models tapi ditolak di endpoint interactions)
+      const models = [model, ...VISION_MODELS.filter((m) => m !== model)];
+      let sdkErr = null;
+      for (const m of models) {
         try {
-          json = await callGemini(model, key, body);
-          activeModel = model;
+          const interaction = await client.interactions.create({
+            model: m,
+            input: [
+              { type: "text", text: PROMPT },
+              useFilePath
+                ? { type: "image", uri, mime_type: mimeOut }
+                : { type: "image", mime_type: mime, data: b64 },
+            ],
+          });
+          const out = interaction?.output_text || interaction?.output?.text || interaction?.text || "";
+          if (!out) throw new Error("respons kosong");
+          text = out;
+          activeModel = m;
+          logInfo(`Gemini OK (interactions, ${m}) — balasan ${text.length} karakter`);
           break;
         } catch (e) {
-          lastErr = e;
-          const modelGone = e.status === 404 || /(is not found for API version|models\/\S+ is not found|model not found)/i.test(e.body || "");
-          if (modelGone) { logInfo(`Model ${model} tidak tersedia, mencoba fallback...`); continue; }
+          sdkErr = e;
+          const msg = String(e.message || "");
+          if (/no longer available|not found|not supported|NOT_FOUND/i.test(msg)) {
+            logInfo(`Model ${m} ditolak endpoint interactions — coba model lain`);
+            continue;
+          }
           throw e;
         }
       }
-      if (!json) throw lastErr || new Error("Gemini: tidak ada model yang tersedia");
-      text = json?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      if (!text) throw new Error("Gemini kosong");
+      if (!text) throw sdkErr || new Error("Gemini SDK: tidak ada model yang bisa dipakai");
+    } catch (sdkErr) {
+      logError(`Gemini Interactions API gagal: ${String(sdkErr.message).slice(0, 250)}`);
+      logInfo("Beralih ke models.generateContent (inlineData)...");
+      const r = await client_fallback_generateContent(key, activeModel || model, mime, b64);
+      text = r.text;
+      if (r.usedModel) activeModel = r.usedModel;
     }
   }
 

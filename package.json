@@ -11,10 +11,16 @@
     "setup:groups": "node src/setup-groups.js",
     "member": "node src/member.js"
   },
-  "keywords": ["koperasi", "whatsapp", "reminder", "google-sheets"],
+  "keywords": [
+    "koperasi",
+    "whatsapp",
+    "reminder",
+    "google-sheets"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@google/genai": "^2.27.0",
     "@whiskeysockets/baileys": "^6.7.8",
     "dotenv": "^16.4.5",
     "googleapis": "^128.0.0",

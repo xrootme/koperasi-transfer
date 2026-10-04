@@ -4,6 +4,7 @@ const pino = require("pino");
 const qrcode = require("qrcode-terminal");
 const path = require("path");
 const { logInfo, logError } = require("./utils");
+const { saveBukti, catatDuplikat } = require("./bukti-store");
 
 // Baileys/libsignal mencetak "Failed to decrypt ... Bad MAC" ke console.
 // Ini noise non-fatal (pesan lama/duplikat session), bukan error fatal.
@@ -206,10 +207,21 @@ async function handleInbound(msg) {
 
     logInfo(`📸 Gambar diterima dari ${phoneDigits} (${pushName||"-"}) size=${buffer.length} mime=${mime} caption="${(img.content.caption||"").slice(0,80)}"`);
 
+    // Simpan gambar ke disk + deteksi duplikat (gambar sama tidak boleh dikirim 2x)
+    const { filepath: buktiPath, duplikat } = saveBukti(buffer, mime, phoneDigits);
+    if (duplikat) {
+      logInfo(`⛔ Gambar duplikat ditolak dari ${phoneDigits} — hash sama dengan file ${duplikat.file} (pernah dikirim ${duplikat.waktu}, hasil: ${duplikat.hasil})`);
+      return; // tidak balas, tidak proses AI lagi
+    }
+
+    // AI HANYA untuk klasifikasi bukti transfer — tidak mengedit sheet / data lain
     const { analyzeBukti } = require("./bukti");
     let ai;
-    try { ai = await analyzeBukti(buffer, mime); } catch (e) { logError("AI Vision error", e.message); return; }
+    try { ai = await analyzeBukti(buffer, mime, { filePath: buktiPath, pengirim: phoneDigits }); } catch (e) { logError("AI Vision error", e.message); return; }
     if (!ai) return;
+
+    // Catat hash agar gambar sama tidak bisa dikirim ulang
+    catatDuplikat(buffer, { pengirim: phoneDigits, hasil: ai.classification, file: buktiPath ? path.basename(buktiPath) : "-" });
 
     logInfo(`Gambar ${phoneDigits} (${pushName}) → ${ai.classification} conf=${ai.confidence}`);
 

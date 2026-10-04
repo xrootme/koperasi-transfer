@@ -1,3 +1,4 @@
+const fs = require("fs");
 const { logInfo, logError } = require("./utils");
 
 async function fetchWithTimeout(url, opts = {}, ms = 25000) {
@@ -294,7 +295,7 @@ async function callLocal(cfg, bodyParts) {
   return String(text || "");
 }
 
-async function analyzeBukti(buffer, mimeType = "image/jpeg") {
+async function analyzeBukti(buffer, mimeType = "image/jpeg", opts = {}) {
   if (!buffer || buffer.length < 800) {
     return normalizeAIResult({ is_transfer_proof: false, classification: "UNREADABLE", confidence: 0.9, reason: "File terlalu kecil/rusak", missing_fields: [] });
   }
@@ -327,31 +328,65 @@ async function analyzeBukti(buffer, mimeType = "image/jpeg") {
       logError("AI_PROVIDER=gemini tapi GEMINI_API_KEY belum diisi di .env — bukti di-skip");
       return null;
     }
-    const body = {
-      contents: [{ parts: [{ text: PROMPT }, { inlineData: { mimeType: mime, data: b64 } }] }],
-      generationConfig: { temperature: 0, maxOutputTokens: 1024, responseMimeType: "application/json" },
-    };
-    let json = null, lastErr = null;
-    for (const model of modelCandidates()) {
-      try {
-        json = await callGemini(model, key, body);
-        activeModel = model;
-        break;
-      } catch (e) {
-        lastErr = e;
-        // Hanya fallback bila model memang tidak tersedia/retire.
-        // 400 (gambar rusak) atau 401/429 = masalah lain, jangan fallback.
-        const modelGone = e.status === 404 || /(is not found for API version|models\/\S+ is not found|model not found)/i.test(e.body || "");
-        if (modelGone) {
-          logInfo(`Model ${model} tidak tersedia, mencoba fallback...`);
-          continue;
-        }
-        throw e;
+    // Pakai SDK resmi @google/genai (GoogleGenAI + files.upload + interactions.create)
+    try {
+      const { GoogleGenAI } = require("@google/genai");
+      const client = new GoogleGenAI({ apiKey: key });
+      const model = String(process.env.GEMINI_MODEL || "gemini-3.8-flash").trim();
+
+      // 1) Upload gambar (dari path file yang sudah disimpan, atau dari buffer)
+      let uri, mimeOut;
+      const filePath = opts && opts.filePath;
+      if (filePath && fs.existsSync(filePath)) {
+        const uploaded = await client.files.upload({ file: filePath, config: { mimeType: mime } });
+        uri = uploaded.uri || uploaded.file?.uri;
+        mimeOut = uploaded.mimeType || uploaded.file?.mimeType || mime;
+      } else {
+        const uploaded = await client.files.upload({
+          file: { bytes: buffer, mimeType: mime },
+          config: { mimeType: mime },
+        });
+        uri = uploaded.uri || uploaded.file?.uri;
+        mimeOut = uploaded.mimeType || uploaded.file?.mimeType || mime;
       }
+
+      // 2) Minta klasifikasi ke model
+      const interaction = await client.interactions.create({
+        model,
+        input: [
+          { type: "text", text: PROMPT },
+          { type: "image", uri, mime_type: mimeOut },
+        ],
+      });
+
+      text = interaction?.output_text || interaction?.output?.text || interaction?.text || "";
+      activeModel = model;
+      if (!text) throw new Error("Gemini SDK: respons kosong");
+      logInfo(`Gemini SDK upload ok → ${model} (uri: ${String(uri).slice(0, 60)}...)`);
+    } catch (sdkErr) {
+      logError(`Gemini SDK gagal: ${sdkErr.message}`);
+      logError("Beralih ke REST API generateContent...");
+      const body = {
+        contents: [{ parts: [{ text: PROMPT }, { inlineData: { mimeType: mime, data: b64 } }] }],
+        generationConfig: { temperature: 0, maxOutputTokens: 1024, responseMimeType: "application/json" },
+      };
+      let json = null, lastErr = null;
+      for (const model of modelCandidates()) {
+        try {
+          json = await callGemini(model, key, body);
+          activeModel = model;
+          break;
+        } catch (e) {
+          lastErr = e;
+          const modelGone = e.status === 404 || /(is not found for API version|models\/\S+ is not found|model not found)/i.test(e.body || "");
+          if (modelGone) { logInfo(`Model ${model} tidak tersedia, mencoba fallback...`); continue; }
+          throw e;
+        }
+      }
+      if (!json) throw lastErr || new Error("Gemini: tidak ada model yang tersedia");
+      text = json?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      if (!text) throw new Error("Gemini kosong");
     }
-    if (!json) throw lastErr || new Error("Gemini: tidak ada model yang tersedia");
-    text = json?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    if (!text) throw new Error("Gemini kosong");
   }
 
   let parsed;
@@ -366,8 +401,8 @@ async function analyzeBukti(buffer, mimeType = "image/jpeg") {
   return out;
 }
 
-async function isBuktiTransfer(buffer, mimeType) {
-  const r = await analyzeBukti(buffer, mimeType);
+async function isBuktiTransfer(buffer, mimeType, opts) {
+  const r = await analyzeBukti(buffer, mimeType, opts);
   if (!r) return false;
   return r.classification === "VALID_TRANSFER_PROOF" && r.confidence >= 0.75;
 }

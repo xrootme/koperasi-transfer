@@ -1,0 +1,254 @@
+const { logInfo, logError } = require("./utils");
+
+async function fetchWithTimeout(url, opts = {}, ms = 25000) {
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(), ms);
+  try { return await fetch(url, { ...opts, signal: c.signal }); } finally { clearTimeout(t); }
+}
+
+function cleanJsonText(text) {
+  let t = String(text || "").trim();
+  t = t.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/g, "").trim();
+  const a = t.indexOf("{"), b = t.lastIndexOf("}");
+  if (a !== -1 && b !== -1 && b > a) t = t.slice(a, b + 1);
+  return t;
+}
+
+function toNumberOrNull(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const s = String(v).replace(/[^0-9]/g, "");
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeAIResult(raw) {
+  const allowed = ["VALID_TRANSFER_PROOF", "POSSIBLE_TRANSFER_PROOF", "NOT_TRANSFER_PROOF", "UNREADABLE"];
+  let c = String(raw.classification || "").trim().toUpperCase();
+  if (!allowed.includes(c)) {
+    if (raw.is_transfer_proof === true && c === "") c = "POSSIBLE_TRANSFER_PROOF";
+    else if (raw.is_transfer_proof === false) c = "NOT_TRANSFER_PROOF";
+    else c = "UNREADABLE";
+  }
+  const conf = Number(raw.confidence);
+  return {
+    is_transfer_proof: !!raw.is_transfer_proof,
+    classification: c,
+    confidence: Number.isFinite(conf) ? Math.max(0, Math.min(1, conf)) : (c === "VALID_TRANSFER_PROOF" ? 0.9 : c === "NOT_TRANSFER_PROOF" ? 0.95 : 0.6),
+    nominal: toNumberOrNull(raw.nominal),
+    currency: raw.currency || null,
+    tanggal_transfer: raw.tanggal_transfer || null,
+    waktu_transfer: raw.waktu_transfer || null,
+    nama_pengirim: raw.nama_pengirim || null,
+    bank_pengirim: raw.bank_pengirim || null,
+    rekening_pengirim: raw.rekening_pengirim || null,
+    nama_penerima: raw.nama_penerima || null,
+    bank_penerima: raw.bank_penerima || null,
+    rekening_penerima: raw.rekening_penerima || null,
+    referensi_transaksi: raw.referensi_transaksi || null,
+    status_transaksi: raw.status_transaksi || null,
+    reason: raw.reason || "",
+    missing_fields: Array.isArray(raw.missing_fields) ? raw.missing_fields : [],
+    _raw: raw,
+  };
+}
+
+const PROMPT = `
+Anda adalah sistem verifikasi bukti pembayaran untuk koperasi simpan pinjam.
+
+Tugas utama:
+1. Periksa gambar yang diberikan.
+2. Tentukan apakah gambar tersebut merupakan bukti transfer/pembayaran.
+3. Jangan menganggap gambar sebagai bukti transfer hanya karena terdapat nominal uang.
+4. Jika bukan bukti transfer, gunakan classification "NOT_TRANSFER_PROOF".
+5. Jika terlihat seperti bukti transfer tetapi informasi penting tidak terbaca, gunakan classification "POSSIBLE_TRANSFER_PROOF" atau "UNREADABLE".
+6. Jangan pernah menyatakan pembayaran LUNAS hanya berdasarkan hasil AI.
+
+INDIKATOR BUKTI TRANSFER:
+- Terdapat informasi transaksi transfer/pembayaran.
+- Terdapat nominal transfer.
+- Terdapat tanggal atau waktu transaksi.
+- Terdapat nama pengirim atau rekening pengirim jika tersedia.
+- Terdapat rekening/nama penerima atau tujuan transfer jika tersedia.
+- Terdapat nomor referensi transaksi atau ID transaksi jika tersedia.
+- Terdapat status transaksi seperti berhasil, sukses, completed, atau sejenisnya.
+- Tampilan dapat berupa screenshot mobile banking, internet banking, ATM, e-wallet, atau bukti transfer resmi lainnya.
+
+INDIKATOR BUKAN BUKTI TRANSFER:
+- Foto biasa.
+- Meme atau gambar random.
+- Screenshot chat tanpa bukti transaksi.
+- Foto rekening tanpa transaksi.
+- Invoice/tagihan tanpa bukti pembayaran.
+- Screenshot saldo rekening saja.
+- Gambar yang hanya berisi nominal tetapi tidak menunjukkan transaksi.
+- Bukti transfer yang terlihat jelas diedit atau dimanipulasi.
+- Gambar terlalu buram sehingga transaksi tidak dapat dipastikan.
+
+Klasifikasi yang diperbolehkan:
+- VALID_TRANSFER_PROOF
+- POSSIBLE_TRANSFER_PROOF
+- NOT_TRANSFER_PROOF
+- UNREADABLE
+
+ATURAN KLASIFIKASI:
+
+VALID_TRANSFER_PROOF:
+Bukti transfer terlihat jelas dan informasi transaksi cukup untuk mengidentifikasi bahwa transaksi benar-benar terjadi.
+
+POSSIBLE_TRANSFER_PROOF:
+Gambar terlihat seperti bukti transfer, tetapi terdapat informasi penting yang tidak dapat dipastikan atau tidak terbaca.
+
+NOT_TRANSFER_PROOF:
+Gambar bukan bukti transfer.
+
+UNREADABLE:
+Gambar terlalu buram, rusak, terpotong, atau tidak dapat dianalisis.
+
+Jika informasi tidak terlihat, gunakan null.
+Jangan mengarang informasi.
+Confidence harus berupa angka antara 0 dan 1.
+
+Kembalikan HANYA JSON valid.
+Jangan gunakan markdown.
+Jangan gunakan \`\`\`json.
+Jangan memberikan penjelasan di luar JSON.
+
+Format JSON:
+
+{
+  "is_transfer_proof": true,
+  "classification": "VALID_TRANSFER_PROOF",
+  "confidence": 0.95,
+  "nominal": 1100000,
+  "currency": "IDR",
+  "tanggal_transfer": "2026-09-30",
+  "waktu_transfer": "14:32:10",
+  "nama_pengirim": "BUDI SANTOSO",
+  "bank_pengirim": "BCA",
+  "rekening_pengirim": "****1234",
+  "nama_penerima": "KOPERASI ABC",
+  "bank_penerima": "BCA",
+  "rekening_penerima": "****5678",
+  "referensi_transaksi": "ABC123456",
+  "status_transaksi": "BERHASIL",
+  "reason": "Gambar menunjukkan bukti transfer dengan informasi transaksi yang dapat dibaca.",
+  "missing_fields": []
+}
+
+Jika BUKAN bukti transfer, gunakan contoh:
+
+{
+  "is_transfer_proof": false,
+  "classification": "NOT_TRANSFER_PROOF",
+  "confidence": 0.98,
+  "nominal": null,
+  "currency": null,
+  "tanggal_transfer": null,
+  "waktu_transfer": null,
+  "nama_pengirim": null,
+  "bank_pengirim": null,
+  "rekening_pengirim": null,
+  "nama_penerima": null,
+  "bank_penerima": null,
+  "rekening_penerima": null,
+  "referensi_transaksi": null,
+  "status_transaksi": null,
+  "reason": "Gambar tidak menunjukkan bukti transaksi transfer.",
+  "missing_fields": []
+}
+
+Jika gambar terlihat seperti bukti transfer tetapi informasi tidak lengkap:
+
+{
+  "is_transfer_proof": true,
+  "classification": "POSSIBLE_TRANSFER_PROOF",
+  "confidence": 0.72,
+  "nominal": 1100000,
+  "currency": "IDR",
+  "tanggal_transfer": null,
+  "waktu_transfer": null,
+  "nama_pengirim": null,
+  "bank_pengirim": "BCA",
+  "rekening_pengirim": null,
+  "nama_penerima": "KOPERASI ABC",
+  "bank_penerima": null,
+  "rekening_penerima": null,
+  "referensi_transaksi": null,
+  "status_transaksi": null,
+  "reason": "Gambar terlihat seperti bukti transfer tetapi beberapa informasi penting tidak terbaca.",
+  "missing_fields": [
+    "tanggal_transfer",
+    "nama_pengirim",
+    "referensi_transaksi"
+  ]
+}
+
+PENTING:
+
+AI hanya melakukan identifikasi dan ekstraksi data.
+
+AI TIDAK boleh menentukan pembayaran sebagai LUNAS.
+
+Keputusan pembayaran harus dilakukan oleh backend Node.js.
+
+Backend harus mencocokkan hasil AI dengan:
+- ID anggota
+- nominal
+- tanggal transfer
+- nomor referensi
+- rekening tujuan
+- nama anggota
+- ID pinjaman
+- ID angsuran
+- angsuran yang sedang jatuh tempo
+
+Jika data tidak cocok, hasil akhir harus REVIEW.
+
+Jangan pernah mengubah status pembayaran menjadi LUNAS hanya berdasarkan confidence AI.
+`;
+
+async function analyzeBukti(buffer, mimeType = "image/jpeg") {
+  if (!buffer || buffer.length < 800) {
+    return normalizeAIResult({ is_transfer_proof: false, classification: "UNREADABLE", confidence: 0.9, reason: "File terlalu kecil/rusak", missing_fields: [] });
+  }
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) {
+    logError("GEMINI_API_KEY belum diisi di .env — bukti di-skip");
+    return null;
+  }
+  const model = process.env.GEMINI_MODEL || "gemini-1.5-flash";
+  const mime = mimeType.includes("/") ? mimeType : "image/jpeg";
+  const base64 = buffer.toString("base64");
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+  const body = {
+    contents: [{ parts: [{ text: PROMPT }, { inlineData: { mimeType: mime, data: base64 } }] }],
+    generationConfig: { temperature: 0, maxOutputTokens: 1024, responseMimeType: "application/json" },
+  };
+  const res = await fetchWithTimeout(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`Gemini ${res.status} ${t.slice(0, 600)}`);
+  }
+  const json = await res.json();
+  const text = json?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  if (!text) throw new Error("Gemini kosong");
+  let parsed;
+  try {
+    parsed = JSON.parse(cleanJsonText(text));
+  } catch (e) {
+    logError("Gemini JSON parse gagal", text.slice(0, 500));
+    return normalizeAIResult({ is_transfer_proof: false, classification: "UNREADABLE", confidence: 0.6, reason: "AI tidak mengembalikan JSON valid", missing_fields: [] });
+  }
+  const out = normalizeAIResult(parsed);
+  logInfo(`AI Vision → ${out.classification} conf=${out.confidence} nominal=${out.nominal ?? "-"} tgl=${out.tanggal_transfer ?? "-"} status=${out.status_transaksi ?? "-"}`);
+  return out;
+}
+
+async function isBuktiTransfer(buffer, mimeType) {
+  const r = await analyzeBukti(buffer, mimeType);
+  if (!r) return false;
+  return r.classification === "VALID_TRANSFER_PROOF" && r.confidence >= 0.75;
+}
+
+module.exports = { analyzeBukti, isBuktiTransfer, normalizeAIResult, PROMPT };

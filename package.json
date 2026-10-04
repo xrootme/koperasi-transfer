@@ -1,0 +1,25 @@
+{
+  "name": "koperasi-reminder",
+  "version": "1.0.0",
+  "description": "Bot pengingat angsuran koperasi via WhatsApp - terintegrasi Google Sheets",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "setup": "node src/setup.js",
+    "setup:groups": "node src/setup-groups.js",
+    "member": "node src/member.js"
+  },
+  "keywords": ["koperasi", "whatsapp", "reminder", "google-sheets"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.8",
+    "dotenv": "^16.4.5",
+    "googleapis": "^128.0.0",
+    "node-cron": "^3.0.3",
+    "pino": "^9.0.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

@@ -39,7 +39,7 @@ Saat pertama jalan, scan QR code yang muncul di terminal
 | `SPREADSHEET_ID` | ID spreadsheet (dari URL) |
 | `ADMIN_NUMBERS` | Nomor admin, pisahkan koma. Boleh nomor HP atau LID |
 | `GEMINI_API_KEY` | API key Gemini untuk verifikasi bukti |
-| `GEMINI_MODEL` | Default `gemini-1.5-flash` |
+| `GEMINI_MODEL` | Default `gemini-2.5-flash`. Jika model tidak ada, otomatis fallback ke model lain |
 | `CRON_SCHEDULE` | Jadwal broadcast, default `0 9 * * *` |
 | `TIMEZONE` | Default `Asia/Jakarta` |
 | `DELAY_MS` | Jeda antar pesan, default `3000` |

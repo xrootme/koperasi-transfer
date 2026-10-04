@@ -208,6 +208,35 @@ Jika data tidak cocok, hasil akhir harus REVIEW.
 Jangan pernah mengubah status pembayaran menjadi LUNAS hanya berdasarkan confidence AI.
 `;
 
+// Model Gemini yang mendukung vision (urutan fallback).
+// gemini-1.5-flash sudah di-retire oleh Google -> jangan dipakai lagi.
+const VISION_MODELS = [
+  "gemini-2.5-flash",
+  "gemini-flash-latest",
+  "gemini-2.0-flash",
+  "gemini-2.5-pro",
+  "gemini-pro-latest",
+];
+let activeModel = null; // di-cache setelah berhasil
+
+function modelCandidates() {
+  const configured = String(process.env.GEMINI_MODEL || "").trim();
+  const list = configured ? [configured, ...VISION_MODELS] : [...VISION_MODELS];
+  if (activeModel) list.unshift(activeModel);
+  return [...new Set(list)];
+}
+
+async function callGemini(model, key, body) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+  const res = await fetchWithTimeout(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (res.ok) return await res.json();
+  const t = await res.text().catch(() => "");
+  const err = new Error(`Gemini ${model} HTTP ${res.status}: ${t.slice(0, 400)}`);
+  err.status = res.status;
+  err.body = t;
+  throw err;
+}
+
 async function analyzeBukti(buffer, mimeType = "image/jpeg") {
   if (!buffer || buffer.length < 800) {
     return normalizeAIResult({ is_transfer_proof: false, classification: "UNREADABLE", confidence: 0.9, reason: "File terlalu kecil/rusak", missing_fields: [] });
@@ -217,20 +246,32 @@ async function analyzeBukti(buffer, mimeType = "image/jpeg") {
     logError("GEMINI_API_KEY belum diisi di .env — bukti di-skip");
     return null;
   }
-  const model = process.env.GEMINI_MODEL || "gemini-1.5-flash";
   const mime = mimeType.includes("/") ? mimeType : "image/jpeg";
-  const base64 = buffer.toString("base64");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
   const body = {
-    contents: [{ parts: [{ text: PROMPT }, { inlineData: { mimeType: mime, data: base64 } }] }],
+    contents: [{ parts: [{ text: PROMPT }, { inlineData: { mimeType: mime, data: buffer.toString("base64") } }] }],
     generationConfig: { temperature: 0, maxOutputTokens: 1024, responseMimeType: "application/json" },
   };
-  const res = await fetchWithTimeout(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(`Gemini ${res.status} ${t.slice(0, 600)}`);
+
+  let json = null, lastErr = null;
+  for (const model of modelCandidates()) {
+    try {
+      json = await callGemini(model, key, body);
+      activeModel = model;
+      break;
+    } catch (e) {
+      lastErr = e;
+      // Hanya fallback bila model memang tidak tersedia/retire.
+      // 400 (gambar rusak) atau 401/429 = masalah lain, jangan fallback.
+      const modelGone = e.status === 404 || /(is not found for API version|models\/\S+ is not found|model not found)/i.test(e.body || "");
+      if (modelGone) {
+        logInfo(`Model ${model} tidak tersedia, mencoba fallback...`);
+        continue;
+      }
+      throw e;
+    }
   }
-  const json = await res.json();
+  if (!json) throw lastErr || new Error("Gemini: tidak ada model yang tersedia");
+
   const text = json?.candidates?.[0]?.content?.parts?.[0]?.text || "";
   if (!text) throw new Error("Gemini kosong");
   let parsed;
@@ -241,7 +282,7 @@ async function analyzeBukti(buffer, mimeType = "image/jpeg") {
     return normalizeAIResult({ is_transfer_proof: false, classification: "UNREADABLE", confidence: 0.6, reason: "AI tidak mengembalikan JSON valid", missing_fields: [] });
   }
   const out = normalizeAIResult(parsed);
-  logInfo(`AI Vision → ${out.classification} conf=${out.confidence} nominal=${out.nominal ?? "-"} tgl=${out.tanggal_transfer ?? "-"} status=${out.status_transaksi ?? "-"}`);
+  logInfo(`AI Vision [${activeModel}] → ${out.classification} conf=${out.confidence} nominal=${out.nominal ?? "-"} tgl=${out.tanggal_transfer ?? "-"} status=${out.status_transaksi ?? "-"}`);
   return out;
 }
 
